@@ -31,6 +31,7 @@ final BLANK_OUTPUT =
 class Transaction {
   int version = 2;
   int locktime = 0;
+  int time = 0;
   List<Input> ins = [];
   List<Output> outs = [];
   Transaction();
@@ -179,6 +180,7 @@ class Transaction {
     writeUInt32(input.sequence);
     writeSlice(hashOutputs);
     writeUInt32(this.locktime);
+    writeUInt32(this.time);
     writeUInt32(hashType);
 
     return bcrypto.hash256(tbuffer);
@@ -246,6 +248,7 @@ class Transaction {
   _byteLength(_ALLOW_WITNESS) {
     var hasWitness = _ALLOW_WITNESS && hasWitnesses();
     return (hasWitness ? 10 : 8) +
+        4 + //timestamp
         varuint.encodingLength(ins.length) +
         varuint.encodingLength(outs.length) +
         ins.fold(0, (sum, input) => sum + 40 + varSliceSize(input.script)) +
@@ -390,6 +393,7 @@ class Transaction {
     }
 
     writeUInt32(this.locktime);
+    writeUInt32(this.time);
     // End writeBuffer
 
     // avoid slicing unless necessary
@@ -402,6 +406,7 @@ class Transaction {
     Transaction tx = new Transaction();
     tx.version = _tx.version;
     tx.locktime = _tx.locktime;
+    tx.time = _tx.time;
     tx.ins = _tx.ins.map((input) {
       return Input.clone(input);
     }).toList();
@@ -503,6 +508,7 @@ class Transaction {
     }
 
     tx.locktime = readUInt32();
+    tx.time = readUInt32();
 
     if (noStrict) return tx;
 
