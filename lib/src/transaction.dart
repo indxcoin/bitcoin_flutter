@@ -29,7 +29,7 @@ final BLANK_OUTPUT =
     new Output(script: EMPTY_SCRIPT, valueBuffer: VALUE_UINT64_MAX);
 
 class Transaction {
-  int version = 1;
+  int version = 2;
   int locktime = 0;
   List<Input> ins = [];
   List<Output> outs = [];
