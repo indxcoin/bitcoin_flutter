@@ -237,11 +237,11 @@ class Transaction {
       txTmp.ins[inIndex].script = ourScript;
     }
     // serialize and hash
-    final buffer = Uint8List(txTmp.virtualSize() + 4);
+    final buffer = Uint8List(txTmp.virtualSize());
     buffer.buffer
         .asByteData()
         .setUint32(buffer.length - 4, hashType, Endian.little);
-    txTmp._toBuffer(buffer, 0);
+    txTmp._toSigningBuffer(buffer, 0);
     return bcrypto.hash256(buffer);
   }
 
@@ -394,6 +394,101 @@ class Transaction {
 
     writeUInt32(this.locktime);
     writeUInt32(this.time);
+    // End writeBuffer
+
+    // avoid slicing unless necessary
+    if (initialOffset != null) return buffer.sublist(initialOffset, offset);
+
+    return buffer;
+  }
+
+  _toSigningBuffer([Uint8List? buffer, initialOffset, bool _ALLOW_WITNESS = false]) {
+    // _ALLOW_WITNESS is used to separate witness part when calculating tx id
+    if (buffer == null) buffer = new Uint8List(_byteLength(_ALLOW_WITNESS));
+
+    // Any changes made to the ByteData will also change the buffer, and vice versa.
+    // https://api.dart.dev/stable/2.7.1/dart-typed_data/ByteBuffer/asByteData.html
+    var bytes = buffer.buffer.asByteData();
+    var offset = initialOffset ?? 0;
+
+    writeSlice(slice) {
+      buffer!.setRange(offset, offset + slice.length, slice);
+      offset += slice.length;
+    }
+
+    writeUInt8(i) {
+      bytes.setUint8(offset, i);
+      offset++;
+    }
+
+    writeUInt32(i) {
+      bytes.setUint32(offset, i, Endian.little);
+      offset += 4;
+    }
+
+    writeInt32(i) {
+      bytes.setInt32(offset, i, Endian.little);
+      offset += 4;
+    }
+
+    writeUInt64(i) {
+      bytes.setUint64(offset, i, Endian.little);
+      offset += 8;
+    }
+
+    writeVarInt(i) {
+      varuint.encode(i, buffer, offset);
+      offset += varuint.encodingLength(i);
+    }
+
+    writeVarSlice(slice) {
+      writeVarInt(slice.length);
+      writeSlice(slice);
+    }
+
+    writeVector(vector) {
+      writeVarInt(vector.length);
+      vector.forEach((buf) {
+        writeVarSlice(buf);
+      });
+    }
+
+    // Start writeBuffer
+    writeInt32(version);
+
+    if (_ALLOW_WITNESS && hasWitnesses()) {
+      writeUInt8(ADVANCED_TRANSACTION_MARKER);
+      writeUInt8(ADVANCED_TRANSACTION_FLAG);
+    }
+
+    writeVarInt(this.ins.length);
+
+    ins.forEach((txIn) {
+      writeSlice(txIn.hash);
+      writeUInt32(txIn.index);
+      writeVarSlice(txIn.script);
+      writeUInt32(txIn.sequence);
+    });
+
+    writeVarInt(this.outs.length);
+
+    outs.forEach((txOut) {
+      if (txOut.valueBuffer == null) {
+        writeUInt64(txOut.value);
+      } else {
+        writeSlice(txOut.valueBuffer);
+      }
+      writeVarSlice(txOut.script);
+    });
+
+    if (_ALLOW_WITNESS && hasWitnesses()) {
+      ins.forEach((txInt) {
+        writeVector(txInt.witness);
+      });
+    }
+
+    writeUInt32(this.locktime);
+    // we dont add nTime to the buffer during signing
     // End writeBuffer
 
     // avoid slicing unless necessary
