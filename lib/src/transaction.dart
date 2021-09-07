@@ -29,8 +29,9 @@ final BLANK_OUTPUT =
     new Output(script: EMPTY_SCRIPT, valueBuffer: VALUE_UINT64_MAX);
 
 class Transaction {
-  int version = 1;
+  int version = 2;
   int locktime = 0;
+  int time = 0;
   List<Input> ins = [];
   List<Output> outs = [];
   Transaction();
@@ -179,6 +180,7 @@ class Transaction {
     writeUInt32(input.sequence);
     writeSlice(hashOutputs);
     writeUInt32(this.locktime);
+    writeUInt32(this.time);
     writeUInt32(hashType);
 
     return bcrypto.hash256(tbuffer);
@@ -235,17 +237,18 @@ class Transaction {
       txTmp.ins[inIndex].script = ourScript;
     }
     // serialize and hash
-    final buffer = Uint8List(txTmp.virtualSize() + 4);
+    final buffer = Uint8List(txTmp.virtualSize());
     buffer.buffer
         .asByteData()
         .setUint32(buffer.length - 4, hashType, Endian.little);
-    txTmp._toBuffer(buffer, 0);
+    txTmp._toSigningBuffer(buffer, 0);
     return bcrypto.hash256(buffer);
   }
 
   _byteLength(_ALLOW_WITNESS) {
     var hasWitness = _ALLOW_WITNESS && hasWitnesses();
     return (hasWitness ? 10 : 8) +
+        4 + //timestamp
         varuint.encodingLength(ins.length) +
         varuint.encodingLength(outs.length) +
         ins.fold(0, (sum, input) => sum + 40 + varSliceSize(input.script)) +
@@ -273,6 +276,10 @@ class Transaction {
 
   int virtualSize() {
     return (weight() / 4).ceil();
+  }
+
+  int get txSize {
+    return virtualSize();
   }
 
   Uint8List toBuffer([Uint8List buffer, int initialOffset]) {
@@ -390,6 +397,102 @@ class Transaction {
     }
 
     writeUInt32(this.locktime);
+    writeUInt32(this.time);
+    // End writeBuffer
+
+    // avoid slicing unless necessary
+    if (initialOffset != null) return buffer.sublist(initialOffset, offset);
+
+    return buffer;
+  }
+
+  _toSigningBuffer([Uint8List? buffer, initialOffset, bool _ALLOW_WITNESS = false]) {
+    // _ALLOW_WITNESS is used to separate witness part when calculating tx id
+    if (buffer == null) buffer = new Uint8List(_byteLength(_ALLOW_WITNESS));
+
+    // Any changes made to the ByteData will also change the buffer, and vice versa.
+    // https://api.dart.dev/stable/2.7.1/dart-typed_data/ByteBuffer/asByteData.html
+    var bytes = buffer.buffer.asByteData();
+    var offset = initialOffset ?? 0;
+
+    writeSlice(slice) {
+      buffer!.setRange(offset, offset + slice.length, slice);
+      offset += slice.length;
+    }
+
+    writeUInt8(i) {
+      bytes.setUint8(offset, i);
+      offset++;
+    }
+
+    writeUInt32(i) {
+      bytes.setUint32(offset, i, Endian.little);
+      offset += 4;
+    }
+
+    writeInt32(i) {
+      bytes.setInt32(offset, i, Endian.little);
+      offset += 4;
+    }
+
+    writeUInt64(i) {
+      bytes.setUint64(offset, i, Endian.little);
+      offset += 8;
+    }
+
+    writeVarInt(i) {
+      varuint.encode(i, buffer, offset);
+      offset += varuint.encodingLength(i);
+    }
+
+    writeVarSlice(slice) {
+      writeVarInt(slice.length);
+      writeSlice(slice);
+    }
+
+    writeVector(vector) {
+      writeVarInt(vector.length);
+      vector.forEach((buf) {
+        writeVarSlice(buf);
+      });
+    }
+
+    // Start writeBuffer
+    writeInt32(version);
+
+    if (_ALLOW_WITNESS && hasWitnesses()) {
+      writeUInt8(ADVANCED_TRANSACTION_MARKER);
+      writeUInt8(ADVANCED_TRANSACTION_FLAG);
+    }
+
+    writeVarInt(this.ins.length);
+
+    ins.forEach((txIn) {
+      writeSlice(txIn.hash);
+      writeUInt32(txIn.index);
+      writeVarSlice(txIn.script);
+      writeUInt32(txIn.sequence);
+    });
+
+    writeVarInt(this.outs.length);
+
+    outs.forEach((txOut) {
+      if (txOut.valueBuffer == null) {
+        writeUInt64(txOut.value);
+      } else {
+        writeSlice(txOut.valueBuffer);
+      }
+      writeVarSlice(txOut.script);
+    });
+
+    if (_ALLOW_WITNESS && hasWitnesses()) {
+      ins.forEach((txInt) {
+        writeVector(txInt.witness);
+      });
+    }
+
+    writeUInt32(this.locktime);
+    // we dont add nTime to the buffer during signing
     // End writeBuffer
 
     // avoid slicing unless necessary
@@ -402,6 +505,7 @@ class Transaction {
     Transaction tx = new Transaction();
     tx.version = _tx.version;
     tx.locktime = _tx.locktime;
+    tx.time = _tx.time;
     tx.ins = _tx.ins.map((input) {
       return Input.clone(input);
     }).toList();
@@ -503,6 +607,7 @@ class Transaction {
     }
 
     tx.locktime = readUInt32();
+    tx.time = readUInt32();
 
     if (noStrict) return tx;
 
